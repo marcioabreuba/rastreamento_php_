@@ -12,13 +12,21 @@ services:
       - key: APP_DEBUG
         value: false
       - key: CACHE_DRIVER
-        value: file
+        value: redis
       - key: SESSION_DRIVER
-        value: file
+        value: redis
       - key: QUEUE_CONNECTION
-        value: database
+        value: redis
       - key: FILESYSTEM_DISK
         value: local
+      - key: REDIS_ENABLED
+        value: true
+      - key: REDIS_HOST
+        value: redis-17623.c74.us-east-1-4.ec2.redns.redis-cloud.com
+      - key: REDIS_PASSWORD
+        value: TGT9TZNhbBTr0mlmpFlCFQMVKqJAXOoB
+      - key: REDIS_PORT
+        value: 17623
       - key: PORT
         value: 8080
       - key: RENDER
@@ -31,4 +39,5 @@ services:
 databases:
   - name: traquementophp-db
     plan: starter
+    type: postgres
     ipAllowList: [] 

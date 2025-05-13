@@ -16,19 +16,31 @@ if [ ! -f .env ]; then
 fi
 
 # Gerar chave se não existir
-if grep -q "APP_KEY=base64:" .env; then
-  php artisan key:generate --force
-fi
+php artisan key:generate --force
 
 # Configurar banco de dados para Render
 if [ ! -z "$RENDER" ] && [ ! -z "$RENDER_DATABASE_URL" ]; then
-  echo "Configurando banco de dados para Render..."
+  echo "Configurando banco de dados para Render (PostgreSQL)..."
+  
+  # Atualizar o .env para usar PostgreSQL
+  sed -i "s/^DB_CONNECTION=.*/DB_CONNECTION=pgsql/" .env
+  
   # Extrair informações da URL do banco de dados
-  DB_HOST=$(echo $RENDER_DATABASE_URL | awk -F[@//] '{print $4}')
-  DB_PORT=$(echo $RENDER_DATABASE_URL | awk -F[:] '{print $4}' | awk -F[/] '{print $1}')
-  DB_DATABASE=$(echo $RENDER_DATABASE_URL | awk -F[/] '{print $4}')
-  DB_USERNAME=$(echo $RENDER_DATABASE_URL | awk -F[:@] '{print $2}')
-  DB_PASSWORD=$(echo $RENDER_DATABASE_URL | awk -F[:@] '{print $3}')
+  if [[ $RENDER_DATABASE_URL == postgres://* ]]; then
+    # Formato: postgres://username:password@host:port/database
+    DB_USERNAME=$(echo $RENDER_DATABASE_URL | sed -E 's/^postgres:\/\/([^:]+):.*/\1/')
+    DB_PASSWORD=$(echo $RENDER_DATABASE_URL | sed -E 's/^postgres:\/\/[^:]+:([^@]+).*/\1/')
+    DB_HOST=$(echo $RENDER_DATABASE_URL | sed -E 's/^postgres:\/\/[^@]+@([^:]+).*/\1/')
+    DB_PORT=$(echo $RENDER_DATABASE_URL | sed -E 's/^postgres:\/\/[^:]+:[^@]+@[^:]+:([0-9]+).*/\1/')
+    DB_DATABASE=$(echo $RENDER_DATABASE_URL | sed -E 's/^postgres:\/\/[^\/]+\/([^?]+).*/\1/')
+  else
+    echo "Formato de URL de banco de dados não reconhecido. Usando valores padrão."
+    DB_USERNAME=${DB_USERNAME:-postgres}
+    DB_PASSWORD=${DB_PASSWORD:-postgres}
+    DB_HOST=${DB_HOST:-localhost}
+    DB_PORT=${DB_PORT:-5432}
+    DB_DATABASE=${DB_DATABASE:-postgres}
+  fi
   
   # Atualizar o .env
   sed -i "s/^DB_HOST=.*/DB_HOST=$DB_HOST/" .env
@@ -36,6 +48,13 @@ if [ ! -z "$RENDER" ] && [ ! -z "$RENDER_DATABASE_URL" ]; then
   sed -i "s/^DB_DATABASE=.*/DB_DATABASE=$DB_DATABASE/" .env
   sed -i "s/^DB_USERNAME=.*/DB_USERNAME=$DB_USERNAME/" .env
   sed -i "s/^DB_PASSWORD=.*/DB_PASSWORD=$DB_PASSWORD/" .env
+  
+  echo "Configuração do banco de dados concluída:"
+  echo "  DB_CONNECTION: pgsql"
+  echo "  DB_HOST: $DB_HOST"
+  echo "  DB_PORT: $DB_PORT"
+  echo "  DB_DATABASE: $DB_DATABASE"
+  echo "  DB_USERNAME: $DB_USERNAME"
 fi
 
 # Verificar se a pasta GeoIP existe e tem conteúdo
@@ -56,5 +75,6 @@ php artisan migrate --force
 echo "Otimizando a aplicação..."
 php artisan optimize
 
-# Iniciar o Apache
+# Iniciar o Apache com porta configurada pelo ambiente
+echo "Iniciando Apache na porta: ${PORT:-80}"
 apache2-foreground 
