@@ -27,12 +27,7 @@ RUN apt-get install -y libmaxminddb-dev \
 
 # Configurar o Apache
 RUN a2enmod rewrite
-COPY docker/apache/000-default.conf /etc/apache2/sites-available/000-default.conf
-
-# Criar script para configurar a porta do Apache
-RUN echo '#!/bin/bash\necho "Listen $PORT" > /etc/apache2/ports.conf\nexec "$@"' > /usr/local/bin/docker-entrypoint.sh \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh \
-    && sed -i 's/<VirtualHost \*:80>/<VirtualHost *:$PORT>/g' /etc/apache2/sites-available/000-default.conf
+COPY docker/apache/000-default.conf /etc/apache2/sites-available/000-default.conf.template
 
 # Instalar o Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -62,5 +57,4 @@ RUN chmod +x /usr/local/bin/start.sh
 EXPOSE ${PORT:-80}
 
 # Entrypoint
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/usr/local/bin/start.sh"] 

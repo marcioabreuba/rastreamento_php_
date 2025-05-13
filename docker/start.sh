@@ -83,13 +83,48 @@ fi
 echo "Limpando cache..."
 php artisan optimize:clear
 
-# Executar migrações com fresh para resolver problemas de transação
-echo "Executando migrações com reset..."
+# Abordagem mais agressiva para migração de banco de dados no Render
 if [ ! -z "$RENDER" ]; then
-  # No ambiente Render, vamos tentar primeiro com --force para sobrescrever tabelas existentes
+  echo "Realizando reset completo do banco de dados..."
+  
+  # Primeira tentativa: Tentar remover todas as tabelas manualmente usando SQL direto
+  DB_CONN_STRING="pgsql:host=$DB_HOST;port=$DB_PORT;dbname=$DB_DATABASE;user=$DB_USERNAME;password=$DB_PASSWORD"
+  
+  echo "Dropando tabelas existentes..."
+  # Script SQL para listar e dropar todas as tabelas
+  DROP_TABLES_SQL="
+  SELECT 'DROP TABLE IF EXISTS \"' || tablename || '\" CASCADE;' 
+  FROM pg_tables 
+  WHERE schemaname = 'public';"
+  
+  # Executar o SQL para gerar os comandos de drop
+  DROP_COMMANDS=$(php -r "
+  try {
+      \$pdo = new PDO('$DB_CONN_STRING');
+      \$stmt = \$pdo->query(\"$DROP_TABLES_SQL\");
+      \$dropCommands = \$stmt->fetchAll(PDO::FETCH_COLUMN);
+      foreach (\$dropCommands as \$cmd) {
+          echo \$cmd . \"\n\";
+          \$pdo->exec(\$cmd);
+      }
+      echo \"Tabelas removidas com sucesso.\n\";
+  } catch (Exception \$e) {
+      echo \"Erro ao dropar tabelas: \" . \$e->getMessage() . \"\n\";
+  }
+  ")
+  
+  echo "$DROP_COMMANDS"
+  
+  # Segunda tentativa: Usar comandos do Laravel
+  echo "Tentando schema:drop..."
+  php artisan db:wipe --force || true
+  
+  # Terceira tentativa: Tentar migrate:fresh e migrate regular
+  echo "Executando migrações..."
   php artisan migrate:fresh --force || php artisan migrate --force
 else
   # Em outros ambientes, executar normal
+  echo "Executando migrações..."
   php artisan migrate --force
 fi
 
@@ -97,6 +132,32 @@ fi
 echo "Otimizando a aplicação..."
 php artisan optimize
 
-# Iniciar o Apache com porta configurada pelo ambiente
-echo "Iniciando Apache na porta: ${PORT:-80}"
+# Criar configuração Apache dinamicamente para resolver problema de variável
+echo "Configurando Apache com a porta correta..."
+APACHE_PORT=${PORT:-80}
+echo "Porta do Apache: $APACHE_PORT"
+
+# Reescrever o arquivo VirtualHost para usar a porta correta
+cat > /etc/apache2/sites-available/000-default.conf << EOF
+<VirtualHost *:$APACHE_PORT>
+    ServerName localhost
+    ServerAdmin webmaster@localhost
+    DocumentRoot /var/www/html/public
+
+    <Directory /var/www/html/public>
+        Options Indexes FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+
+    ErrorLog \${APACHE_LOG_DIR}/error.log
+    CustomLog \${APACHE_LOG_DIR}/access.log combined
+</VirtualHost>
+EOF
+
+# Atualizar o arquivo ports.conf também
+echo "Listen $APACHE_PORT" > /etc/apache2/ports.conf
+
+# Iniciar o Apache
+echo "Iniciando Apache na porta: $APACHE_PORT"
 apache2-foreground 
