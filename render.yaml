@@ -1,0 +1,34 @@
+services:
+  - type: web
+    name: traquementophp
+    env: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: false
+      - key: CACHE_DRIVER
+        value: file
+      - key: SESSION_DRIVER
+        value: file
+      - key: QUEUE_CONNECTION
+        value: database
+      - key: FILESYSTEM_DISK
+        value: local
+      - key: PORT
+        value: 8080
+      - key: RENDER
+        value: true
+      - key: RENDER_DATABASE_URL
+        fromDatabase:
+          name: traquementophp-db
+          property: connectionString
+
+databases:
+  - name: traquementophp-db
+    plan: starter
+    ipAllowList: [] 
