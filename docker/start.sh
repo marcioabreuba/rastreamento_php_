@@ -1,5 +1,30 @@
 #!/bin/bash
 
+# Configurar o .env
+if [ ! -f .env ]; then
+  echo "Criando arquivo .env..."
+  cp .env.example .env
+fi
+
+# Definir APP_KEY se não existir
+echo "Verificando APP_KEY..."
+if ! grep -q "APP_KEY=" .env || grep -q "APP_KEY=base64:" .env; then
+  echo "Gerando nova APP_KEY..."
+  php artisan key:generate --force
+  # Verificar se a chave foi gerada
+  if grep -q "APP_KEY=base64:" .env; then
+    echo "APP_KEY gerada com sucesso!"
+  else
+    echo "Erro ao gerar APP_KEY, adicionando manualmente..."
+    # Gerar uma chave aleatória e adicioná-la diretamente ao .env
+    RANDOM_KEY=$(openssl rand -base64 32)
+    sed -i "s/APP_KEY=.*/APP_KEY=base64:$RANDOM_KEY/" .env
+    if [ $? -ne 0 ]; then
+      echo "APP_KEY=base64:$RANDOM_KEY" >> .env
+    fi
+  fi
+fi
+
 # Esperar pelo MySQL se estiver em ambiente não-Render
 if [ -z "$RENDER" ] && [ ! -z "${DB_HOST}" ]; then
   echo "Esperando pelo MySQL..."
@@ -8,15 +33,6 @@ if [ -z "$RENDER" ] && [ ! -z "${DB_HOST}" ]; then
   done
   echo "MySQL disponível!"
 fi
-
-# Configurar o .env
-if [ ! -f .env ]; then
-  echo "Criando arquivo .env..."
-  cp .env.example .env
-fi
-
-# Gerar chave se não existir
-php artisan key:generate --force
 
 # Configurar banco de dados para Render
 if [ ! -z "$RENDER" ] && [ ! -z "$RENDER_DATABASE_URL" ]; then
@@ -67,9 +83,15 @@ fi
 echo "Limpando cache..."
 php artisan optimize:clear
 
-# Executar migrações
-echo "Executando migrações..."
-php artisan migrate --force
+# Executar migrações com fresh para resolver problemas de transação
+echo "Executando migrações com reset..."
+if [ ! -z "$RENDER" ]; then
+  # No ambiente Render, vamos tentar primeiro com --force para sobrescrever tabelas existentes
+  php artisan migrate:fresh --force || php artisan migrate --force
+else
+  # Em outros ambientes, executar normal
+  php artisan migrate --force
+fi
 
 # Otimizar a aplicação
 echo "Otimizando a aplicação..."
