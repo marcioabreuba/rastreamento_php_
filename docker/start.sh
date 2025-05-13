@@ -1,74 +1,45 @@
 #!/bin/bash
 
-# Configurar o .env
-if [ ! -f .env ]; then
-  echo "Criando arquivo .env..."
-  cp .env.example .env
+# Script de inicialização simplificado para o Render.
+# Assume-se que TODAS as variáveis de ambiente necessárias (APP_KEY, DB_*, etc.)
+# são definidas diretamente no painel de Environment do Render e estão acessíveis ao PHP.
+
+echo "[start.sh] Iniciando script de inicialização..."
+
+# Verificação opcional de variáveis de ambiente essenciais
+echo "[start.sh] Verificando variáveis de ambiente essenciais..."
+if [ -z "$APP_KEY" ]; then
+  echo "[start.sh] ALERTA: A variável de ambiente APP_KEY não foi detectada."
+  echo "[start.sh] Certifique-se de que APP_KEY está definida nas Environment Variables do Render."
+fi
+if [ -z "$DB_CONNECTION" ]; then
+  echo "[start.sh] ALERTA: A variável de ambiente DB_CONNECTION não foi detectada."
+  echo "[start.sh] Certifique-se de que as configurações de banco de dados (DB_CONNECTION, DB_HOST, etc.) estão definidas no Render."
 fi
 
-# Definir APP_KEY se não existir
-echo "Verificando APP_KEY..."
-# Verifica se APP_KEY está ausente, é a string padrão do Laravel, ou não parece uma chave base64 válida
-if ! grep -q "APP_KEY=" .env || grep -q "APP_KEY=base64:\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\/\=" .env || ! grep -E "APP_KEY=base64:[a-zA-Z0-9+/]{42}[AEIMQUYcgkosw048]=?" .env; then
-  echo "APP_KEY ausente ou inválida, gerando nova APP_KEY..."
-  php artisan key:generate --force
-  if grep -E "APP_KEY=base64:[a-zA-Z0-9+/]{42}[AEIMQUYcgkosw048]=?" .env; then
-    echo "APP_KEY gerada com sucesso e é válida!"
-  else
-    echo "ERRO CRÍTICO: Falha ao gerar uma APP_KEY válida. Verifique as permissões ou o ambiente Laravel."
-    exit 1 # Falhar o script se a APP_KEY não puder ser gerada
-  fi
-fi
-
-# Esperar pelo MySQL se estiver em ambiente não-Render (mantido para flexibilidade)
-if [ -z "$RENDER" ] && [ ! -z "${DB_HOST}" ]; then
-  echo "Esperando pelo MySQL..."
-  while ! nc -z $DB_HOST $DB_PORT; do
-    sleep 0.5
-  done
-  echo "MySQL disponível!"
-fi
-
-# Configurar banco de dados para Render
-if [ ! -z "$RENDER" ] && [ ! -z "$RENDER_DATABASE_URL" ]; then
-  echo "Configurando banco de dados para Render (PostgreSQL) no .env..."
-  
-  sed -i "s|^DB_CONNECTION=.*|DB_CONNECTION=pgsql|" .env
-  
-  # Extração robusta dos componentes da URL do banco de dados PostgreSQL
-  DB_USERNAME=$(echo $RENDER_DATABASE_URL | sed -n 's_postgres://\([^:]*\):.*_\1_p')
-  DB_PASSWORD=$(echo $RENDER_DATABASE_URL | sed -n 's_postgres://[^:]*:\([^@]*\)@.*_\1_p')
-  DB_HOST=$(echo $RENDER_DATABASE_URL | sed -n 's_postgres://[^@]*@\([^:]*\):.*_\1_p')
-  DB_PORT=$(echo $RENDER_DATABASE_URL | sed -n 's_postgres://[^:]*:[^@]*@[^:]*:\([0-9]*\)/.*_\1_p')
-  DB_DATABASE=$(echo $RENDER_DATABASE_URL | sed -n 's_postgres://[^/]*/\([^?]*\).*_\1_p')
-  
-  sed -i "s|^DB_HOST=.*|DB_HOST=$DB_HOST|" .env
-  sed -i "s|^DB_PORT=.*|DB_PORT=$DB_PORT|" .env
-  sed -i "s|^DB_DATABASE=.*|DB_DATABASE=$DB_DATABASE|" .env
-  sed -i "s|^DB_USERNAME=.*|DB_USERNAME=$DB_USERNAME|" .env
-  sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=$DB_PASSWORD|" .env
-  
-  echo "Configuração do banco de dados no .env atualizada para Render."
-  echo "  DB_HOST: $DB_HOST"
-  echo "  DB_PORT: $DB_PORT"
-  echo "  DB_DATABASE: $DB_DATABASE"
-fi
-
-# Verificar se a pasta GeoIP existe (Download/Criação deve ser no Dockerfile ou buildCommand)
-if [ ! -d "storage/app/geoip" ] || [ -z "$(ls -A storage/app/geoip)" ]; then
-  echo "AVISO: Base de dados GeoIP não encontrada em storage/app/geoip. Crie o diretório se necessário."
+# Cria o diretório GeoIP se não existir. O download do arquivo GeoIP deve ser feito
+# no Dockerfile ou como parte do buildCommand no render.yaml.
+echo "[start.sh] Verificando diretório GeoIP..."
+if [ ! -d "storage/app/geoip" ]; then
+  echo "[start.sh] Diretório storage/app/geoip não encontrado. Criando..."
   mkdir -p storage/app/geoip
+  if [ -d "storage/app/geoip" ]; then
+    echo "[start.sh] Diretório storage/app/geoip criado com sucesso."
+  else
+    echo "[start.sh] ERRO: Falha ao criar o diretório storage/app/geoip."
+  fi
+else
+  echo "[start.sh] Diretório storage/app/geoip já existe."
 fi
 
-# As migrações e otimizações (php artisan optimize, optimize:clear) 
-# agora são tratadas no buildCommand do render.yaml.
+# Migrações, otimizações (config:cache, route:cache, view:cache, event:cache), 
+# e php artisan optimize são executados no 'buildCommand' definido no render.yaml.
 
-# Criar configuração Apache dinamicamente para resolver problema de variável
-echo "Configurando Apache com a porta correta..."
-APACHE_PORT=${PORT:-80} # Render define PORT, 80 é fallback
-echo "Porta do Apache: $APACHE_PORT"
+echo "[start.sh] Configurando o Apache..."
+APACHE_PORT=${PORT:-80} # Render define a variável PORT; 80 é um fallback.
+echo "[start.sh] Apache será configurado para escutar na porta: $APACHE_PORT"
 
-# Reescrever o arquivo VirtualHost para usar a porta correta
+# Configura o VirtualHost do Apache para usar a porta correta.
 cat > /etc/apache2/sites-available/000-default.conf << EOF
 <VirtualHost *:$APACHE_PORT>
     ServerAdmin webmaster@localhost
@@ -84,19 +55,26 @@ cat > /etc/apache2/sites-available/000-default.conf << EOF
     CustomLog \${APACHE_LOG_DIR}/access.log combined
 </VirtualHost>
 EOF
+echo "[start.sh] Arquivo de configuração do VirtualHost (/etc/apache2/sites-available/000-default.conf) atualizado."
 
-# Atualizar o arquivo ports.conf também, garantindo que não haja duplicatas
+# Garante que o Apache escute na porta correta, comentando outras portas se necessário.
 if ! grep -q "Listen $APACHE_PORT" /etc/apache2/ports.conf; then
-  # Se a porta padrão 80 ou 443 estiver lá e for diferente da APACHE_PORT, comente-as
-  if [ "$APACHE_PORT" != "80" ] && grep -q "Listen 80" /etc/apache2/ports.conf; then
-    sed -i 's/^Listen 80/#Listen 80/' /etc/apache2/ports.conf
+  echo "[start.sh] Atualizando /etc/apache2/ports.conf para Listen $APACHE_PORT..."
+  # Comenta Listen 80 se não for a porta desejada
+  if [ "$APACHE_PORT" != "80" ] && grep -q -E "^\s*Listen\s+80\b" /etc/apache2/ports.conf; then
+    sed -i -E 's/^(\s*Listen\s+80\b)/#\1/' /etc/apache2/ports.conf
+    echo "[start.sh] Listen 80 comentado em ports.conf."
   fi
-  if [ "$APACHE_PORT" != "443" ] && grep -q "Listen 443" /etc/apache2/ports.conf; then
-    sed -i 's/^Listen 443/#Listen 443/' /etc/apache2/ports.conf
+  # Comenta Listen 443 se não for a porta desejada (improvável para este setup)
+  if [ "$APACHE_PORT" != "443" ] && grep -q -E "^\s*Listen\s+443\b" /etc/apache2/ports.conf; then
+    sed -i -E 's/^(\s*Listen\s+443\b)/#\1/' /etc/apache2/ports.conf
+    echo "[start.sh] Listen 443 comentado em ports.conf."
   fi
   echo "Listen $APACHE_PORT" >> /etc/apache2/ports.conf
+  echo "[start.sh] Adicionado Listen $APACHE_PORT em ports.conf."
+else
+  echo "[start.sh] Apache já está configurado para Listen $APACHE_PORT em ports.conf."
 fi
 
-# Iniciar o Apache
-echo "Iniciando Apache na porta: $APACHE_PORT"
+echo "[start.sh] Iniciando Apache em primeiro plano na porta $APACHE_PORT..."
 apache2-foreground 
