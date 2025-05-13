@@ -39,17 +39,13 @@ services:
       set -e
       echo "[BuildCommand] Iniciando..."
       
-      echo "[BuildCommand] Configurando e executando geoipupdate..."
-      mkdir -p storage/app/geoip
-      echo "AccountId ${MAXMIND_ACCOUNT_ID}" > /tmp/GeoIP.conf
-      echo "LicenseKey ${MAXMIND_LICENSE_KEY}" >> /tmp/GeoIP.conf
-      echo "EditionIDs GeoLite2-City" >> /tmp/GeoIP.conf # Adicione outras edições se necessário, e.g., GeoLite2-Country
-      
-      echo "[BuildCommand] Conteúdo do /tmp/GeoIP.conf:"
-      cat /tmp/GeoIP.conf
-      
-      geoipupdate -v -f /tmp/GeoIP.conf -d storage/app/geoip
-      echo "[BuildCommand] geoipupdate concluído."
+      echo "[BuildCommand] Verificando existência do arquivo GeoIP..."
+      if [ -f "storage/app/geoip/GeoLite2-City.mmdb" ]; then
+        echo "[BuildCommand] GeoLite2-City.mmdb encontrado em storage/app/geoip/."
+      else
+        echo "[BuildCommand] ALERTA: GeoLite2-City.mmdb NÃO encontrado em storage/app/geoip/ após COPY . ."
+        echo "[BuildCommand] Certifique-se que o arquivo está comitado no Git e não está no .gitignore."
+      fi
       
       echo "[BuildCommand] Executando otimizações e migrações Laravel..."
       php artisan config:cache && \
