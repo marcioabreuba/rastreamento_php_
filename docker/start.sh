@@ -85,43 +85,156 @@ php artisan optimize:clear
 
 # Abordagem mais agressiva para migração de banco de dados no Render
 if [ ! -z "$RENDER" ]; then
-  echo "Realizando reset completo do banco de dados..."
+  echo "Realizando reset completo do banco de dados PostgreSQL..."
   
-  # Primeira tentativa: Tentar remover todas as tabelas manualmente usando SQL direto
+  # Configurar strings de conexão
   DB_CONN_STRING="pgsql:host=$DB_HOST;port=$DB_PORT;dbname=$DB_DATABASE;user=$DB_USERNAME;password=$DB_PASSWORD"
   
-  echo "Dropando tabelas existentes..."
-  # Script SQL para listar e dropar todas as tabelas
-  DROP_TABLES_SQL="
-  SELECT 'DROP TABLE IF EXISTS \"' || tablename || '\" CASCADE;' 
-  FROM pg_tables 
-  WHERE schemaname = 'public';"
+  # Limpeza completa do PostgreSQL em três camadas
+  echo "===== INICIANDO LIMPEZA COMPLETA DO BANCO DE DADOS ====="
   
-  # Executar o SQL para gerar os comandos de drop
-  DROP_COMMANDS=$(php -r "
+  # CAMADA 1: Terminar todas as conexões existentes e limpar completamente o schema
+  echo "CAMADA 1: Terminando conexões existentes e limpando schema..."
+  
+  php -r "
   try {
+      echo \"Conectando ao PostgreSQL...\n\";
       \$pdo = new PDO('$DB_CONN_STRING');
-      \$stmt = \$pdo->query(\"$DROP_TABLES_SQL\");
-      \$dropCommands = \$stmt->fetchAll(PDO::FETCH_COLUMN);
-      foreach (\$dropCommands as \$cmd) {
-          echo \$cmd . \"\n\";
-          \$pdo->exec(\$cmd);
-      }
-      echo \"Tabelas removidas com sucesso.\n\";
-  } catch (Exception \$e) {
-      echo \"Erro ao dropar tabelas: \" . \$e->getMessage() . \"\n\";
+      \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+      
+      echo \"Terminando conexões existentes...\n\";
+      // Primeiro, cancelar qualquer consulta em execução que não seja a nossa
+      \$sql = \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity 
+              WHERE pid <> pg_backend_pid() 
+              AND datname = '$DB_DATABASE';\";
+      \$stmt = \$pdo->prepare(\$sql);
+      \$stmt->execute();
+      echo \"Conexões terminadas.\n\";
+      
+      echo \"Recriando schema público...\n\";
+      // Dropar e recriar o schema público
+      \$pdo->exec('DROP SCHEMA IF EXISTS public CASCADE;');
+      \$pdo->exec('CREATE SCHEMA public;');
+      
+      // Dar as permissões necessárias
+      \$pdo->exec('GRANT ALL ON SCHEMA public TO public;');
+      \$pdo->exec('GRANT ALL ON SCHEMA public TO \"$DB_USERNAME\";');
+      
+      echo \"Schema público recriado com sucesso.\n\";
+  } catch (PDOException \$e) {
+      echo \"Erro na CAMADA 1: \" . \$e->getMessage() . \"\n\";
   }
-  ")
+  "
   
-  echo "$DROP_COMMANDS"
-  
-  # Segunda tentativa: Usar comandos do Laravel
-  echo "Tentando schema:drop..."
+  # CAMADA 2: Usar comandos Laravel para limpar o banco de dados
+  echo "CAMADA 2: Utilizando comandos Laravel para limpar o banco de dados..."
   php artisan db:wipe --force || true
   
-  # Terceira tentativa: Tentar migrate:fresh e migrate regular
-  echo "Executando migrações..."
-  php artisan migrate:fresh --force || php artisan migrate --force
+  # CAMADA 3: Forçar o DROP de objetos individuais
+  echo "CAMADA 3: Forçando remoção de objetos individuais..."
+  
+  php -r "
+  try {
+      \$pdo = new PDO('$DB_CONN_STRING');
+      \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+      
+      // Lista todas as tabelas
+      \$sql = \"SELECT tablename FROM pg_tables WHERE schemaname = 'public';\";
+      \$stmt = \$pdo->query(\$sql);
+      \$tables = \$stmt->fetchAll(PDO::FETCH_COLUMN);
+      
+      if (count(\$tables) > 0) {
+          echo \"Removendo \" . count(\$tables) . \" tabelas restantes...\n\";
+          foreach (\$tables as \$table) {
+              \$dropSql = \"DROP TABLE IF EXISTS \\\"\$table\\\" CASCADE;\";
+              echo \"Executando: \$dropSql\n\";
+              \$pdo->exec(\$dropSql);
+          }
+      } else {
+          echo \"Nenhuma tabela encontrada para remover.\n\";
+      }
+      
+      // Lista todas as sequências
+      \$sql = \"SELECT sequencename FROM pg_sequences WHERE schemaname = 'public';\";
+      \$stmt = \$pdo->query(\$sql);
+      \$sequences = \$stmt->fetchAll(PDO::FETCH_COLUMN);
+      
+      if (count(\$sequences) > 0) {
+          echo \"Removendo \" . count(\$sequences) . \" sequências restantes...\n\";
+          foreach (\$sequences as \$sequence) {
+              \$dropSql = \"DROP SEQUENCE IF EXISTS \\\"\$sequence\\\" CASCADE;\";
+              echo \"Executando: \$dropSql\n\";
+              \$pdo->exec(\$dropSql);
+          }
+      } else {
+          echo \"Nenhuma sequência encontrada para remover.\n\";
+      }
+      
+      echo \"Limpeza de objetos individuais concluída.\n\";
+  } catch (PDOException \$e) {
+      echo \"Erro na CAMADA 3: \" . \$e->getMessage() . \"\n\";
+  }
+  "
+  
+  echo "===== LIMPEZA COMPLETA FINALIZADA ====="
+  
+  # Executar migrações com maior robustez
+  echo "Executando migrações com tratamento aprimorado..."
+  
+  # Primeiro tentar migrate:fresh (que deve funcionar agora com o banco limpo)
+  echo "Tentativa 1: migrate:fresh"
+  if php artisan migrate:fresh --force; then
+      echo "Migrações executadas com sucesso via migrate:fresh!"
+  else
+      echo "Falha no migrate:fresh, tentando migrate padrão..."
+      
+      # Se falhar, tentar migrate normal
+      echo "Tentativa 2: migrate padrão"
+      if php artisan migrate --force; then
+          echo "Migrações executadas com sucesso via migrate padrão!"
+      else
+          echo "ERRO: Todas as tentativas de migração falharam."
+          echo "Verificando estado do banco de dados após falhas..."
+          
+          # Diagnóstico final
+          php -r "
+          try {
+              \$pdo = new PDO('$DB_CONN_STRING');
+              \$pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+              
+              echo \"Tabelas existentes no banco de dados:\n\";
+              \$stmt = \$pdo->query(\"SELECT tablename FROM pg_tables WHERE schemaname = 'public';\");
+              \$tables = \$stmt->fetchAll(PDO::FETCH_COLUMN);
+              
+              if (count(\$tables) > 0) {
+                  foreach (\$tables as \$table) {
+                      echo \" - \$table\n\";
+                  }
+              } else {
+                  echo \" * Nenhuma tabela encontrada\n\";
+              }
+              
+              echo \"Status das migrations:\n\";
+              if (in_array('migrations', \$tables)) {
+                  \$stmt = \$pdo->query(\"SELECT migration, batch FROM migrations ORDER BY batch, migration;\");
+                  \$migrations = \$stmt->fetchAll(PDO::FETCH_ASSOC);
+                  
+                  if (count(\$migrations) > 0) {
+                      foreach (\$migrations as \$migration) {
+                          echo \" - {\$migration['migration']} (Batch: {\$migration['batch']})\n\";
+                      }
+                  } else {
+                      echo \" * Tabela migrations existe mas está vazia\n\";
+                  }
+              } else {
+                  echo \" * Tabela migrations não existe\n\";
+              }
+          } catch (PDOException \$e) {
+              echo \"Erro durante diagnóstico: \" . \$e->getMessage() . \"\n\";
+          }
+          "
+      fi
+  fi
 else
   # Em outros ambientes, executar normal
   echo "Executando migrações..."
