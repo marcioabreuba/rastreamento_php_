@@ -36,11 +36,28 @@ services:
           name: traquementophp-db
           property: connectionString
     buildCommand: |
+      set -e
+      echo "[BuildCommand] Iniciando..."
+      
+      echo "[BuildCommand] Configurando e executando geoipupdate..."
+      mkdir -p storage/app/geoip
+      echo "AccountId ${MAXMIND_ACCOUNT_ID}" > /tmp/GeoIP.conf
+      echo "LicenseKey ${MAXMIND_LICENSE_KEY}" >> /tmp/GeoIP.conf
+      echo "EditionIDs GeoLite2-City" >> /tmp/GeoIP.conf # Adicione outras edições se necessário, e.g., GeoLite2-Country
+      
+      echo "[BuildCommand] Conteúdo do /tmp/GeoIP.conf:"
+      cat /tmp/GeoIP.conf
+      
+      geoipupdate -v -f /tmp/GeoIP.conf -d storage/app/geoip
+      echo "[BuildCommand] geoipupdate concluído."
+      
+      echo "[BuildCommand] Executando otimizações e migrações Laravel..."
       php artisan config:cache && \
       php artisan route:cache && \
       php artisan view:cache && \
       php artisan event:cache && \
-      php artisan migrate:fresh --force --seed # Executa as migrações aqui!
+      php artisan migrate:fresh --force --seed
+      echo "[BuildCommand] Otimizações e migrações Laravel concluídas."
     startCommand: /usr/local/bin/start.sh
 
 databases:

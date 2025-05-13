@@ -5,6 +5,8 @@ WORKDIR /var/www/html
 
 # Instalar dependências
 RUN apt-get update && apt-get install -y \
+    gnupg \
+    apt-transport-https \
     git \
     curl \
     libpng-dev \
@@ -16,6 +18,11 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     libicu-dev \
     netcat-openbsd \
+    # Adicionar o PPA da MaxMind e instalar geoipupdate
+    && curl -fsSL https://ppa.launchpadcontent.net/maxmind/ppa/ubuntu/dists/jammy/Release.gpg | gpg --dearmor -o /usr/share/keyrings/maxmind-ppa-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/maxmind-ppa-archive-keyring.gpg] https://ppa.launchpadcontent.net/maxmind/ppa/ubuntu jammy main" > /etc/apt/sources.list.d/maxmind-ppa.list \
+    && apt-get update && apt-get install -y geoipupdate \
+    # Continuar com as extensões PHP
     && pecl install redis \
     && docker-php-ext-enable redis \
     && docker-php-ext-configure gd --with-freetype --with-jpeg \
@@ -23,10 +30,16 @@ RUN apt-get update && apt-get install -y \
     && docker-php-ext-install pdo pdo_mysql pdo_pgsql bcmath exif intl opcache zip \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Instalar e configurar o GeoIP
+# Instalar e configurar o GeoIP (extensão PHP maxminddb) - esta parte é para a extensão PHP, não o geoipupdate em si
+# A instalação do geoipupdate acima já cuida de obter o programa para atualizar o banco de dados.
+# RUN apt-get update && apt-get install -y libmaxminddb-dev \
+#     && (pecl install -f -n maxminddb || true) \
+#     && docker-php-ext-enable maxminddb || true
+# Mantendo a instalação da extensão PHP maxminddb, pois é necessária para ler o arquivo .mmdb
 RUN apt-get update && apt-get install -y libmaxminddb-dev \
-    && (pecl install -f -n maxminddb || true) \
-    && docker-php-ext-enable maxminddb || true
+    && pecl install maxminddb \
+    && docker-php-ext-enable maxminddb \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Configurar o Apache
 RUN a2enmod rewrite
