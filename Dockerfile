@@ -8,17 +8,21 @@ RUN apt-get update && apt-get install -y \
     git \
     curl \
     libpng-dev \
-    libonig-dev \
-    libxml2-dev \
+    libjpeg-dev \
+    libfreetype6-dev \
+    libzip-dev \
     zip \
     unzip \
-    libzip-dev \
+    libpq-dev \
     libicu-dev \
     netcat-openbsd \
-    libpq-dev \
-    && docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd zip intl pdo_pgsql pgsql \
-    && pecl install redis \
-    && docker-php-ext-enable redis
+    libmaxminddb-dev \
+    && pecl install redis maxminddb \
+    && docker-php-ext-enable redis maxminddb \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) gd \
+    && docker-php-ext-install pdo pdo_mysql pdo_pgsql bcmath exif intl opcache zip \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Instalar e configurar o GeoIP
 RUN apt-get install -y libmaxminddb-dev \
@@ -33,13 +37,14 @@ COPY docker/apache/000-default.conf /etc/apache2/sites-available/000-default.con
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 
 # Copiar os arquivos da aplicação
+COPY composer.json composer.lock ./
 COPY . .
 
 # Configurar permissões
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
 
 # Instalar dependências do Composer
-RUN composer install --no-interaction --no-dev --optimize-autoloader
+RUN composer install --no-interaction --no-plugins --no-scripts --no-dev --prefer-dist --optimize-autoloader
 
 # Criar diretórios necessários
 RUN mkdir -p storage/app/geoip \
