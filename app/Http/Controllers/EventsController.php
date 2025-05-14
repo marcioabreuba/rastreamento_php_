@@ -68,7 +68,7 @@ class EventsController extends Controller
             $hashedState = hash('sha256', $state);
             $hashedCity = hash('sha256', $city);
             $hashedPostalCode = hash('sha256', $postalCode);
-        } catch (\Exception $e) {
+        } catch (\GeoIp2\Exception\AddressNotFoundException $e) { // Captura específica para endereço não encontrado
             $country = null;
             $state = null;
             $city = null;
@@ -77,7 +77,19 @@ class EventsController extends Controller
             $hashedState = null;
             $hashedCity = null;
             $hashedPostalCode = null;
-            logger()->error('Erro ao consultar o GeoIP: ' . $e->getMessage());
+            // Logar como INFO, pois é um caso esperado para IPs privados/internos
+            logger()->info('Consulta GeoIP: Endereço não encontrado no banco de dados.', ['ip' => $request->ip(), 'message' => $e->getMessage()]);
+        } catch (\Exception $e) { // Captura para outros erros de GeoIP
+            $country = null;
+            $state = null;
+            $city = null;
+            $postalCode = null;
+            $hashedCountry = null;
+            $hashedState = null;
+            $hashedCity = null;
+            $hashedPostalCode = null;
+            // Outros erros podem ser mais críticos
+            logger()->error('Erro inesperado ao consultar o GeoIP: ' . $e->getMessage(), ['ip' => $request->ip()]);
         }
         try {
             // Apenas para quem usa a minha Api
@@ -89,7 +101,7 @@ class EventsController extends Controller
                 Config::set('conversions-api.access_token', $config['access_token']);
                 Config::set('conversions-api.test_code', $config['test_code']);
             } else {
-                Log::info('[ERROR][EVENTS] Não achou o produto no banco de dados: ' . $contentId);
+                Log::info('[EVENTS] Configuração não encontrada para contentId: ' . $contentId);
             }
             
             $request->merge([
