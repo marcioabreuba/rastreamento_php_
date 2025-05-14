@@ -11,7 +11,7 @@ class CreateUsersTable extends Migration
         Schema::create('users', function (Blueprint $table) {
             $table->id(); // Cria o campo 'id' como AUTO_INCREMENT e PRIMARY KEY
             $table->string('content_id')->nullable();
-            $table->string('external_id')->nullable(); // Removido o ->unique() e tornado nullable para teste
+            $table->string('external_id')->unique(); // Cria 'external_id' como único
             $table->string('client_ip_address', 45)->nullable(); // 'client_ip_address' pode ser nulo
             $table->text('client_user_agent')->nullable(); // 'client_user_agent' pode ser nulo
             $table->string('fbp')->nullable(); // 'fbp' pode ser nulo
@@ -24,7 +24,6 @@ class CreateUsersTable extends Migration
             $table->string('ln')->nullable(); // 'ln' pode ser nulo
             $table->string('em')->nullable(); // 'em' pode ser nulo
             $table->string('ph', 20)->nullable(); // 'ph' pode ser nulo
-            $table->string('test_column')->nullable(); // Apenas uma coluna simples para teste
             $table->timestamps(0); // Cria 'created_at' e 'updated_at' com tipo TIMESTAMP
         });
     }
