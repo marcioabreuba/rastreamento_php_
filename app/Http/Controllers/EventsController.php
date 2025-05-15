@@ -22,7 +22,6 @@ use App\Events\ViewVideo_90;
 use Esign\ConversionsApi\Facades\ConversionsApi;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
-use GeoIp2\WebService\Client;
 use GeoIp2\Database\Reader;
 use Esign\ConversionsApi\Objects\DefaultUserData;
 use FacebookAds\Object\ServerSide\CustomData;
@@ -37,29 +36,13 @@ class EventsController extends Controller
     {
         // Log::info('Recebendo Payload:', $request->all());
         try {
-            // Determine client IP
+            // Determine client IP (use X-Forwarded-For headers or remote)
             $ip = $request->header('CF-Connecting-IP')
                 ?? $request->header('X-Forwarded-For');
-            if ($ip) {
-                $ip = trim(explode(',', $ip)[0]);
-            } else {
-                $ip = $request->ip();
-            }
-            // Try WebService
-            $accountId = env('MAXMIND_ACCOUNT_ID');
-            $licenseKey = env('MAXMIND_LICENSE_KEY');
-            $client = new Client($accountId, $licenseKey);
-            try {
-                $record = $client->city($ip);
-            } catch (\Exception $e) {
-                if (str_contains($e->getMessage(), 'permission to use this service interface')) {
-                    Log::warning('GeoIP WebService auth failed, falling back to local mmdb: ' . $e->getMessage(), ['ip' => $ip]);
-                    $reader = new Reader(storage_path('app/geoip/GeoLite2-City.mmdb'));
-                    $record = $reader->city($ip);
-                } else {
-                    throw $e;
-                }
-            }
+            $ip = $ip ? trim(explode(',', $ip)[0]) : $request->ip();
+            // Use local GeoLite2 database for geolocation
+            $reader = new Reader(storage_path('app/geoip/GeoLite2-City.mmdb'));
+            $record = $reader->city($ip);
             // Common processing
             $country = strtolower($record->country->isoCode);
             $state = strtolower($record->mostSpecificSubdivision->isoCode);
