@@ -3,6 +3,7 @@
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Log;
 
 return new class extends Migration
 {
@@ -11,17 +12,24 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('cache', function (Blueprint $table) {
-            $table->string('key')->primary();
-            $table->text('value');
-            $table->integer('expiration');
-        });
+        Log::info('Iniciando migração da tabela cache');
+        try {
+            Schema::create('cache', function (Blueprint $table) {
+                $table->string('key')->primary();
+                $table->text('value');
+                $table->integer('expiration');
+            });
+            Log::info('Tabela cache criada com sucesso');
 
-        Schema::create('cache_locks', function (Blueprint $table) {
-            $table->string('key')->primary();
-            $table->string('owner');
-            $table->integer('expiration');
-        });
+            Schema::create('cache_locks', function (Blueprint $table) {
+                $table->string('key')->primary();
+                $table->string('owner');
+                $table->integer('expiration');
+            });
+        } catch (\Exception $e) {
+            Log::error('Falha ao criar tabela cache: '.$e->getMessage());
+            throw $e;
+        }
     }
 
     /**
