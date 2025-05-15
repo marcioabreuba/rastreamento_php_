@@ -23,7 +23,14 @@ class AppServiceProvider extends ServiceProvider
     {
         // Trust all proxies to correctly capture X-Forwarded-For headers
         TrustProxies::at('*');
-        // Trust all forwarded headers
-        TrustProxies::withHeaders(Request::HEADER_X_FORWARDED_ALL);
+        // Trust all forwarded headers (combine all X-Forwarded flags)
+        TrustProxies::withHeaders(
+            Request::HEADER_X_FORWARDED_FOR |
+            Request::HEADER_X_FORWARDED_HOST |
+            Request::HEADER_X_FORWARDED_PORT |
+            Request::HEADER_X_FORWARDED_PROTO |
+            Request::HEADER_X_FORWARDED_PREFIX |
+            Request::HEADER_X_FORWARDED_AWS_ELB
+        );
     }
 }
