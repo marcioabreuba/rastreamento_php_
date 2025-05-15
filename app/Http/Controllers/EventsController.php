@@ -23,6 +23,7 @@ use Esign\ConversionsApi\Facades\ConversionsApi;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use GeoIp2\WebService\Client;
+use GeoIp2\Database\Reader;
 use Esign\ConversionsApi\Objects\DefaultUserData;
 use FacebookAds\Object\ServerSide\CustomData;
 use FacebookAds\Object\ServerSide\UserData;
@@ -36,60 +37,56 @@ class EventsController extends Controller
     {
         // Log::info('Recebendo Payload:', $request->all());
         try {
-            // Use MaxMind WebService Client for accurate GeoIP lookup
+            // Determine client IP
+            $ip = $request->header('CF-Connecting-IP')
+                ?? $request->header('X-Forwarded-For');
+            if ($ip) {
+                $ip = trim(explode(',', $ip)[0]);
+            } else {
+                $ip = $request->ip();
+            }
+            // Try WebService
             $accountId = env('MAXMIND_ACCOUNT_ID');
             $licenseKey = env('MAXMIND_LICENSE_KEY');
             $client = new Client($accountId, $licenseKey);
-            $ip = $request->ip();
-            $record = $client->city($ip);
-            
-            // Obter todos os dados com o GeoLite
-            // ==================================================
+            try {
+                $record = $client->city($ip);
+            } catch (\Exception $e) {
+                if (str_contains($e->getMessage(), 'permission to use this service interface')) {
+                    Log::warning('GeoIP WebService auth failed, falling back to local mmdb: ' . $e->getMessage(), ['ip' => $ip]);
+                    $reader = new Reader(storage_path('app/geoip/GeoLite2-City.mmdb'));
+                    $record = $reader->city($ip);
+                } else {
+                    throw $e;
+                }
+            }
+            // Common processing
             $country = strtolower($record->country->isoCode);
             $state = strtolower($record->mostSpecificSubdivision->isoCode);
             $city = strtolower($record->city->name);
             $postalCode = $record->postal->code;
-
-            // Substitui acentos manualmente
-            // ==================================================
+            // Clean accents and non-letters
             $city = strtr($city, [
-                'á' => 'a', 'à' => 'a', 'ã' => 'a', 'â' => 'a',
-                'é' => 'e', 'ê' => 'e', 'í' => 'i', 'ó' => 'o',
-                'ô' => 'o', 'õ' => 'o', 'ú' => 'u', 'ç' => 'c',
-                'Á' => 'a', 'À' => 'a', 'Ã' => 'a', 'Â' => 'a',
-                'É' => 'e', 'Ê' => 'e', 'Í' => 'i', 'Ó' => 'o',
-                'Ô' => 'o', 'Õ' => 'o', 'Ú' => 'u', 'Ç' => 'c'
+                'á'=>'a','à'=>'a','ã'=>'a','â'=>'a',
+                'é'=>'e','ê'=>'e','í'=>'i','ó'=>'o',
+                'ô'=>'o','õ'=>'o','ú'=>'u','ç'=>'c'
             ]);
-            $city = preg_replace('/[^a-z]/', '', $city); 
-
-            // Colocar hash nos dados
-            // ==================================================
-            $hashedCountry = hash('sha256', $country);
-            $hashedState = hash('sha256', $state);
-            $hashedCity = hash('sha256', $city);
-            $hashedPostalCode = hash('sha256', $postalCode);
-        } catch (\GeoIp2\Exception\AddressNotFoundException $e) { // Captura específica para endereço não encontrado
-            $country = null;
-            $state = null;
-            $city = null;
-            $postalCode = null;
-            $hashedCountry = null;
-            $hashedState = null;
-            $hashedCity = null;
-            $hashedPostalCode = null;
-            // Logar como INFO, pois é um caso esperado para IPs privados/internos
-            logger()->info('Consulta GeoIP: Endereço não encontrado no banco de dados.', ['ip' => $request->ip(), 'message' => $e->getMessage()]);
-        } catch (\Exception $e) { // Captura para outros erros de GeoIP
-            $country = null;
-            $state = null;
-            $city = null;
-            $postalCode = null;
-            $hashedCountry = null;
-            $hashedState = null;
-            $hashedCity = null;
-            $hashedPostalCode = null;
-            // Outros erros podem ser mais críticos
-            logger()->error('Erro inesperado ao consultar o GeoIP: ' . $e->getMessage(), ['ip' => $request->ip()]);
+            $city = preg_replace('/[^a-z]/','',$city);
+            // Hash values
+            $hashedCountry = hash('sha256',$country);
+            $hashedState = hash('sha256',$state);
+            $hashedCity = hash('sha256',$city);
+            $hashedPostalCode = hash('sha256',$postalCode);
+        } catch (\GeoIp2\Exception\AddressNotFoundException $e) {
+            // Expected for private/internal IP
+            $country = $state = $city = $postalCode = null;
+            $hashedCountry = $hashedState = $hashedCity = $hashedPostalCode = null;
+            Log::info('Consulta GeoIP: Endereço não encontrado.', ['ip'=>$ip,'message'=>$e->getMessage()]);
+        } catch (\Exception $e) {
+            // Unhandled errors
+            $country = $state = $city = $postalCode = null;
+            $hashedCountry = $hashedState = $hashedCity = $hashedPostalCode = null;
+            Log::error('Erro inesperado ao consultar GeoIP: '.$e->getMessage(), ['ip'=>$ip]);
         }
         try {
             // Apenas para quem usa a minha Api
