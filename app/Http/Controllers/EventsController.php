@@ -23,6 +23,7 @@ use Esign\ConversionsApi\Facades\ConversionsApi;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use GeoIp2\Database\Reader;
+use GeoIp2\WebService\Client;
 use Esign\ConversionsApi\Objects\DefaultUserData;
 use FacebookAds\Object\ServerSide\CustomData;
 use FacebookAds\Object\ServerSide\UserData;
@@ -36,10 +37,27 @@ class EventsController extends Controller
     {
         // Log::info('Recebendo Payload:', $request->all());
         try {
-            // Determine client IP (use X-Forwarded-For headers or remote)
-            $ip = $request->header('CF-Connecting-IP')
-                ?? $request->header('X-Forwarded-For');
-            $ip = $ip ? trim(explode(',', $ip)[0]) : $request->ip();
+            // Melhorar a obtenção do IP real do cliente
+            $ip = null;
+            
+            // Cloudflare envia este header
+            if ($request->header('CF-Connecting-IP')) {
+                $ip = $request->header('CF-Connecting-IP');
+            } 
+            // Proxies convencionais enviam X-Forwarded-For
+            elseif ($request->header('X-Forwarded-For')) {
+                // X-Forwarded-For pode conter múltiplos IPs em ordem de proxies
+                // O primeiro é geralmente o IP original do cliente
+                $ips = explode(',', $request->header('X-Forwarded-For'));
+                $ip = trim($ips[0]);
+            } 
+            // Fallback para o método padrão
+            else {
+                $ip = $request->ip();
+            }
+            
+            Log::info('IP detectado: ' . $ip);
+            
             // Use local GeoLite2 database for geolocation
             $reader = new Reader(storage_path('app/geoip/GeoLite2-City.mmdb'));
             $record = $reader->city($ip);
@@ -82,6 +100,10 @@ class EventsController extends Controller
                 Config::set('conversions-api.test_code', $config['test_code']);
             } else {
                 Log::info('[EVENTS] Configuração não encontrada para contentId: ' . $contentId);
+                // Podemos adicionar uma configuração padrão aqui se necessário
+                // Config::set('conversions-api.pixel_id', 'PIXEL_ID_PADRAO');
+                // Config::set('conversions-api.access_token', 'ACCESS_TOKEN_PADRAO');
+                // Config::set('conversions-api.test_code', 'TEST_CODE_PADRAO');
             }
             
             $request->merge([
@@ -114,7 +136,7 @@ class EventsController extends Controller
                     'st' => $state,
                     'zp' => $postalCode,
                     'country' => $country,
-                    'client_ip_address' => $initData->getClientIpAddress(),
+                    'client_ip_address' => $ip, // Agora usando o IP correto
                     'client_user_agent' => $initData->getClientUserAgent(),
                     'fbc' => $_fbc,
                     'fbp' => $_fbp,
@@ -126,7 +148,7 @@ class EventsController extends Controller
                     User::create([
                         'content_id' => $contentId,
                         'external_id' => $userId,
-                        'client_ip_address' => $initData->getClientIpAddress(),
+                        'client_ip_address' => $ip, // Agora usando o IP correto
                         'client_user_agent' => $initData->getClientUserAgent(),
                         'fbp' => $_fbp,
                         'fbc' => $_fbc,
@@ -187,7 +209,7 @@ class EventsController extends Controller
                 'event_source_url' => $event->getEventSourceUrl(),
                 'user_data' => [
                     'client_user_agent' => $event->getUserData()->getClientUserAgent(),
-                    'client_ip_address' => $event->getUserData()->getClientIpAddress(),
+                    'client_ip_address' => $ip, // Agora usando o IP correto
                     'fbc' => $event->getUserData()->getFbc(),
                     'fbp' => $event->getUserData()->getFbp(),
                     'external_id' => $userId,
