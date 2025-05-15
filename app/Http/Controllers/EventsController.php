@@ -23,7 +23,6 @@ use Esign\ConversionsApi\Facades\ConversionsApi;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use GeoIp2\WebService\Client;
-use GeoIp2\Database\Reader;
 use Esign\ConversionsApi\Objects\DefaultUserData;
 use FacebookAds\Object\ServerSide\CustomData;
 use FacebookAds\Object\ServerSide\UserData;
@@ -37,11 +36,12 @@ class EventsController extends Controller
     {
         // Log::info('Recebendo Payload:', $request->all());
         try {
-            // Executar o login no GeoLite
-            // ==================================================
-            $reader = new Reader(storage_path('app/geoip/GeoLite2-City.mmdb'));
+            // Use MaxMind WebService Client for accurate GeoIP lookup
+            $accountId = env('MAXMIND_ACCOUNT_ID');
+            $licenseKey = env('MAXMIND_LICENSE_KEY');
+            $client = new Client($accountId, $licenseKey);
             $ip = $request->ip();
-            $record = $reader->city($ip);
+            $record = $client->city($ip);
             
             // Obter todos os dados com o GeoLite
             // ==================================================
