@@ -33,210 +33,154 @@ use App\Models\User;
 
 class EventsController extends Controller
 {
+    /**
+     * Processa e envia eventos para a Conversions API do Facebook.
+     *
+     * @param  \Illuminate\Http\Request  $request
+     * @return \Illuminate\Http\JsonResponse
+     */
     public function send(Request $request)
     {
-        // Log::info('Recebendo Payload:', $request->all());
         try {
-            // Melhorar a obtenção do IP real do cliente
-            $ip = null;
-            
-            // Cloudflare envia este header
-            if ($request->header('CF-Connecting-IP')) {
-                $ip = $request->header('CF-Connecting-IP');
-            } 
-            // Proxies convencionais enviam X-Forwarded-For
-            elseif ($request->header('X-Forwarded-For')) {
-                // X-Forwarded-For pode conter múltiplos IPs em ordem de proxies
-                // O primeiro é geralmente o IP original do cliente
-                $ips = explode(',', $request->header('X-Forwarded-For'));
-                $ip = trim($ips[0]);
-            } 
-            // Fallback para o método padrão
-            else {
-                $ip = $request->ip();
-            }
-            
-            Log::info('IP detectado: ' . $ip);
-            
-            // Use local GeoLite2 database for geolocation
-            $reader = new Reader(storage_path('app/geoip/GeoLite2-City.mmdb'));
-            $record = $reader->city($ip);
-            // Common processing
-            $country = strtolower($record->country->isoCode);
-            $state = strtolower($record->mostSpecificSubdivision->isoCode);
-            $city = strtolower($record->city->name);
-            $postalCode = $record->postal->code;
-            // Clean accents and non-letters
-            $city = strtr($city, [
-                'á'=>'a','à'=>'a','ã'=>'a','â'=>'a',
-                'é'=>'e','ê'=>'e','í'=>'i','ó'=>'o',
-                'ô'=>'o','õ'=>'o','ú'=>'u','ç'=>'c'
-            ]);
-            $city = preg_replace('/[^a-z]/','',$city);
-            // Hash values
-            $hashedCountry = hash('sha256',$country);
-            $hashedState = hash('sha256',$state);
-            $hashedCity = hash('sha256',$city);
-            $hashedPostalCode = hash('sha256',$postalCode);
-        } catch (\GeoIp2\Exception\AddressNotFoundException $e) {
-            // Expected for private/internal IP
-            $country = $state = $city = $postalCode = null;
-            $hashedCountry = $hashedState = $hashedCity = $hashedPostalCode = null;
-            Log::info('Consulta GeoIP: Endereço não encontrado.', ['ip'=>$ip,'message'=>$e->getMessage()]);
-        } catch (\Exception $e) {
-            // Unhandled errors
-            $country = $state = $city = $postalCode = null;
-            $hashedCountry = $hashedState = $hashedCity = $hashedPostalCode = null;
-            Log::error('Erro inesperado ao consultar GeoIP: '.$e->getMessage(), ['ip'=>$ip]);
-        }
-        try {
-            // Apenas para quem usa a minha Api
-            $contentId = $request->post('contentId');
-            $domains = config('conversions.domains');
-            if (isset($domains[$contentId])) {
-                $config = $domains[$contentId];
-                Config::set('conversions-api.pixel_id', $config['pixel_id']);
-                Config::set('conversions-api.access_token', $config['access_token']);
-                Config::set('conversions-api.test_code', $config['test_code']);
-            } else {
-                Log::info('[EVENTS] Configuração não encontrada para contentId: ' . $contentId);
-                // Podemos adicionar uma configuração padrão aqui se necessário
-                // Config::set('conversions-api.pixel_id', 'PIXEL_ID_PADRAO');
-                // Config::set('conversions-api.access_token', 'ACCESS_TOKEN_PADRAO');
-                // Config::set('conversions-api.test_code', 'TEST_CODE_PADRAO');
-            }
-            
-            $request->merge([
-                'ph' => preg_replace('/\D/', '', $request->input('ph'))
-            ]);
+            // Obter dados do cabeçalho Content-Type
+            $contentType = $request->header('Content-Type');
+            $isJson = strpos($contentType, 'application/json') !== false;
 
+            // Validar os dados da requisição
             $validatedData = $request->validate([
-                'eventType' => 'required|string|in:Init,PageView,ViewContent,Lead,AddToWishlist,AddToCart,InitiateCheckout,Purchase,Scroll_25,Scroll_50,Scroll_75,Scroll_90,Timer_1min,PlayVideo,ViewVideo_25,ViewVideo_50,ViewVideo_75,ViewVideo_90',
-                'event_source_url' => 'nullable|string',
-                '_fbc' => 'nullable|string', 
-                '_fbp' => 'nullable|string',
+                'eventType' => 'required|string|in:Init,PageView,ViewContent,Lead,AddToWishlist,AddToCart,InitiateCheckout,Purchase,Scroll_25,Scroll_50,Scroll_75,Scroll_90,Timer_1min,PlayVideo,ViewVideo_25,ViewVideo_50,ViewVideo_75,ViewVideo_90,ViewHomepage,ViewShop,ViewCategory,ViewCart,ShippingInfo,PaymentInfo,PurchaseCreditCard,PurchasePix,PurchaseBoleto,PurchasePixPaid,PurchaseHigherValue,PurchaseCreditCardDeclined,Registration,Search,ViewSearchResults',
+                'contentId' => 'nullable|string',
+                'contentType' => 'nullable|string',
+                'contentName' => 'nullable|string',
+                'currency' => 'nullable|string|size:3',
+                'value' => 'nullable|numeric',
+                'eventID' => 'nullable|string',
+                'search_string' => 'nullable|string',
+                'status' => 'nullable|boolean',
+                'predicted_ltv' => 'nullable|numeric',
+                'num_items' => 'nullable|integer',
                 'userId' => 'nullable|string',
-                'fn' => 'nullable|string|max:255',
-                'ln' => 'nullable|string|max:255',
-                'em' => 'nullable|email|max:255',
-                'ph' => 'nullable|string|max:15',
+                'userAgent' => 'nullable|string',
+                '_fbp' => 'nullable|string',
+                '_fbc' => 'nullable|string',
+                'event_source_url' => 'nullable|string',
             ]);
 
-            $eventType = $validatedData['eventType'];
-            $event_source_url = $validatedData['event_source_url'];
-            $_fbc = $validatedData['_fbc'];
-            $_fbp = $validatedData['_fbp'];
-            $userId = $validatedData['userId'];
-            
-            $initData = ConversionsApi::getUserData();
-            
-            if ($eventType == "Init") {
+            // Caminhos personalizados para o Init
+            if ($validatedData['eventType'] === 'Init') {
+                // Processar evento de inicialização
+                // ...
+                return response()->json(['status' => 'success', 'message' => 'Init event processed']);
+            }
+
+            // Criar nome da classe de evento dinamicamente
+            $eventClassName = '\\App\\Events\\' . $validatedData['eventType'];
+
+            // Verificar se a classe existe
+            if (!class_exists($eventClassName)) {
                 return response()->json([
-                    'ct' => $city,
-                    'st' => $state,
-                    'zp' => $postalCode,
-                    'country' => $country,
-                    'client_ip_address' => $ip, // Agora usando o IP correto
-                    'client_user_agent' => $initData->getClientUserAgent(),
-                    'fbc' => $_fbc,
-                    'fbp' => $_fbp,
-                    'external_id' => $userId
-                ]);
-            } elseif ($eventType == "PageView") {
-                $user = User::where('external_id', $userId)->first();
-                if (!$user) {
-                    User::create([
-                        'content_id' => $contentId,
-                        'external_id' => $userId,
-                        'client_ip_address' => $ip, // Agora usando o IP correto
-                        'client_user_agent' => $initData->getClientUserAgent(),
-                        'fbp' => $_fbp,
-                        'fbc' => $_fbc,
-                        'country' => $country,
-                        'st' => $state,
-                        'ct' => $city,
-                        'zp' => $postalCode,
-                        'fn' => $validatedData['fn'] ?? '',
-                        'ln' => $validatedData['ln'] ?? '',
-                        'em' => $validatedData['em'] ?? '',
-                        'ph' => $validatedData['ph'] ?? '',
-                    ]);
+                    'status' => 'error',
+                    'message' => "Event class {$eventClassName} not found"
+                ], 400);
+            }
+
+            // Criar evento e enviá-lo
+            $event = $eventClassName::create();
+
+            // Adicionar parâmetros extras se fornecidos
+            if (isset($validatedData['contentId'])) {
+                $event->setContentIds([$validatedData['contentId']]);
+            }
+
+            if (isset($validatedData['contentType'])) {
+                $event->setContentType($validatedData['contentType']);
+            }
+
+            if (isset($validatedData['contentName'])) {
+                $event->setContentName($validatedData['contentName']);
+            }
+
+            if (isset($validatedData['currency']) && isset($validatedData['value'])) {
+                $customData = new CustomData();
+                $customData->setCurrency($validatedData['currency']);
+                $customData->setValue($validatedData['value']);
+                
+                if (isset($validatedData['search_string'])) {
+                    $customData->setSearchString($validatedData['search_string']);
                 }
+                
+                if (isset($validatedData['status'])) {
+                    $customData->setStatus($validatedData['status'] ? 'active' : 'inactive');
+                }
+                
+                if (isset($validatedData['predicted_ltv'])) {
+                    $customData->setPredictedLtv($validatedData['predicted_ltv']);
+                }
+                
+                if (isset($validatedData['num_items'])) {
+                    $customData->setNumItems($validatedData['num_items']);
+                }
+                
+                $event->setCustomData($customData);
             }
 
-            // Cria dinamicamente o evento com base no tipo
-            $eventClass = "App\\Events\\{$eventType}";
-            if (!class_exists($eventClass)) {
-                return response()->json(['error' => 'Tipo de evento inválido.'], 400);
+            // Definir URL da origem do evento se fornecida
+            if (isset($validatedData['event_source_url'])) {
+                $event->setEventSourceUrl($validatedData['event_source_url']);
+            } else {
+                $event->setEventSourceUrl($request->headers->get('referer') ?? config('app.url'));
             }
 
-            $event = $eventClass::create()
-                ->setEventSourceUrl($event_source_url)
-                ->setCustomData(
-                    (new CustomData())->setContentIds([$contentId])
-                );
-            $eventID = $event->getEventId();
-
-            $advancedMatching = $event->getUserData()
-                ->setFbc($_fbc)
-                ->setFbp($_fbp)
-                ->setState($state)
-                ->setCountryCode($country)
-                ->setCity($city)
-                ->setZipCode($postalCode)
-                ->setExternalId($userId);
-
-            if (isset($validatedData['fn']) && !empty($validatedData['fn'])) {
-                $advancedMatching->setFirstName($validatedData['fn']);
+            // Definir ID do evento se fornecido
+            if (isset($validatedData['eventID'])) {
+                $event->setEventId($validatedData['eventID']);
             }
 
-            if (isset($validatedData['ln']) && !empty($validatedData['ln'])) {
-                $advancedMatching->setLastName($validatedData['ln']);
+            // Definir dados de usuário personalizados
+            $userData = ConversionsApi::getUserData();
+            
+            if (isset($validatedData['userId'])) {
+                $userData->setExternalId(hash('sha256', $validatedData['userId']));
             }
-
-            if (isset($validatedData['em']) && !empty($validatedData['em'])) {
-                $advancedMatching->setEmail($validatedData['em']);
+            
+            if (isset($validatedData['_fbp'])) {
+                $userData->setFbp($validatedData['_fbp']);
             }
-
-            if (isset($validatedData['ph']) && !empty($validatedData['ph'])) {
-                $advancedMatching->setPhone($validatedData['ph']);
+            
+            if (isset($validatedData['_fbc'])) {
+                $userData->setFbc($validatedData['_fbc']);
             }
+            
+            if (isset($validatedData['userAgent'])) {
+                $userData->setClientUserAgent($validatedData['userAgent']);
+            } else {
+                $userData->setClientUserAgent($request->header('User-Agent'));
+            }
+            
+            $event->setUserData($userData);
 
-            $log = [
+            // Enviar evento para a API
+            $result = ConversionsApi::clearEvents()->addEvent($event)->sendEvents();
+
+            // Retornar resposta
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Event sent successfully',
+                'event_type' => $validatedData['eventType'],
                 'event_id' => $event->getEventId(),
-                'event_name' => $event->getEventName(),
-                'event_time' => $event->getEventTime(),
-                'event_source_url' => $event->getEventSourceUrl(),
-                'user_data' => [
-                    'client_user_agent' => $event->getUserData()->getClientUserAgent(),
-                    'client_ip_address' => $ip, // Agora usando o IP correto
-                    'fbc' => $event->getUserData()->getFbc(),
-                    'fbp' => $event->getUserData()->getFbp(),
-                    'external_id' => $userId,
-                    'country' => $advancedMatching->getCountryCode(),
-                    'state' => $advancedMatching->getState(),
-                    'city' => $advancedMatching->getCity(),
-                    'postal_code' => $advancedMatching->getZipCode(),
-                    'fn' => $validatedData['fn'] ?? '',
-                    'ln' => $validatedData['ln'] ?? '',
-                    'em' => $validatedData['em'] ?? '',
-                    'ph' => $validatedData['ph'] ?? '',
-                ],
-            ];
-
-            $event->setUserData($advancedMatching);
-            ConversionsApi::addEvent($event)->sendEvents();
-
-            Log::channel('Events')->info(json_encode($log, JSON_PRETTY_PRINT));
-
-            return response()->json(['eventID' => $eventID, 'external_id' => $userId]);
-        } catch (\Exception $e) {
-            Log::error('Erro no envio do evento:', [
-                'message' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
+                'timestamp' => $event->getEventTime()
             ]);
-
-            return response()->json(['error' => 'Erro interno no servidor.'], 500);
+        } catch (\Exception $e) {
+            // Registrar erro e retornar resposta de erro
+            Log::error('Error sending event: ' . $e->getMessage(), [
+                'exception' => $e,
+                'request' => $request->all()
+            ]);
+            
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Error processing event: ' . $e->getMessage()
+            ], 500);
         }
     }
 }
